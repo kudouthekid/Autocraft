@@ -294,7 +294,7 @@ public final class AutocraftListener implements Listener {
                     return;
                 }
 
-                manager.handleHopperInput(destBlock, source, event.getDestination(), event.getItem());
+                manager.handleHopperInput(destBlock, source, destination, event.getItem());
                 return;
             }
         }

@@ -222,28 +222,23 @@ public final class AutocraftManager {
     }
 
     public void dropContents(Block block) {
-        if (!(block.getState() instanceof Container container)) {
+        if (!(block.getState(false) instanceof Container container)) {
             return;
         }
-
         Inventory inventory = container.getInventory();
         for (ItemStack item : inventory.getContents()) {
             if (item != null && !item.getType().isAir()) {
                 block.getWorld().dropItemNaturally(block.getLocation(), item.clone());
             }
         }
-
         inventory.clear();
-        container.update(true, false);
     }
 
     public void clearInventory(Block block) {
-        if (!(block.getState() instanceof Container container)) {
+        if (!(block.getState(false) instanceof Container container)) {
             return;
         }
-
         container.getInventory().clear();
-        container.update(true, false);
     }
 
     public boolean isAutocraft(Block block) {
@@ -461,7 +456,11 @@ public final class AutocraftManager {
                 continue;
             }
 
-            attemptCraft(block);
+            try {
+              attemptCraft(block);
+              } catch (Exception ex) {
+                  plugin.getLogger().warning("AutoCraft: craft failed at " + location + ": " + ex);
+              }
         }
     }
 
@@ -471,7 +470,9 @@ public final class AutocraftManager {
             return;
         }
 
-        if (!(block.getState() instanceof Container container)) {
+        // PENTING: getState(false) = live state (Paper).
+        // Perubahan inventory langsung menempel ke tile entity, tanpa update().
+        if (!(block.getState(false) instanceof Container container)) {
             return;
         }
 
@@ -492,8 +493,6 @@ public final class AutocraftManager {
         }
 
         consumeIngredients(inventory, recipe);
-        container.update(true, false);
-
         deliver(block, hoppers, result);
     }
 
@@ -564,18 +563,17 @@ public final class AutocraftManager {
         return Math.min(amount, max);
     }
 
-    private List<Hopper> findOutputHoppers(Block block) {
+        private List<Hopper> findOutputHoppers(Block block) {
         List<Hopper> hoppers = new ArrayList<>();
 
         for (BlockFace face : outputFaces) {
             Block relative = block.getRelative(face);
 
-            if (!(relative.getState() instanceof Hopper hopper)) {
+            // live state, supaya inventory hopper di deliver() adalah inventory dunia nyata
+            if (!(relative.getState(false) instanceof Hopper hopper)) {
                 continue;
             }
 
-            // Hopper yang mengarah MASUK ke autocraft adalah hopper input,
-            // jangan pernah dipakai sebagai target output.
             if (isFeedingInto(relative, block)) {
                 continue;
             }
@@ -666,7 +664,6 @@ public final class AutocraftManager {
 
                 if (accepted > 0) {
                     remaining.setAmount(remaining.getAmount() - accepted);
-                    hopper.update(true, false);
                     addedAny = true;
                 }
             }
@@ -724,6 +721,7 @@ public final class AutocraftManager {
         }
 
         distribute(destination, recipe, moved, actual);
+        attemptCraft(destBlock);
     }
 
     private int calculateAccepted(AutocraftRecipe recipe, Inventory grid, ItemStack item, int amount) {
