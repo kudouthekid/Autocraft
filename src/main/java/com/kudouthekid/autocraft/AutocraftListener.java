@@ -92,17 +92,18 @@ public final class AutocraftListener implements Listener {
             return;
         }
 
-        event.setCancelled(true);
-
         Player player = event.getPlayer();
+        ItemStack hand = event.getItem();
 
-        if (player.isSneaking() && player.hasPermission("autocraft.configure")) {
-            manager.openRecipeGui(player, block);
-        } else {
-            player.sendActionBar(
-                    Component.text("Shift + right-click to configure AutoCraft", NamedTextColor.YELLOW)
-            );
+        // Kalau player lagi SNEAK dan pegang BLOCK (kayak Hopper, Chest, Glass, dll),
+        // JANGAN di-cancel. Biarin vanilla Minecraft handle biar block-nya bisa nempel.
+        if (player.isSneaking() && hand != null && hand.getType().isBlock()) {
+            return; 
         }
+
+        // Selain kondisi di atas (misal klik tangan kosong, atau klik tanpa sneak),
+        // Cancel event-nya biar GUI Barrel gak kebuka.
+        event.setCancelled(true);
     }
 
     @EventHandler
