@@ -80,6 +80,22 @@ public final class AutocraftManager {
         reloadSettings();
     }
 
+    public ItemStack[] getGrid(Block block) {
+        ItemStack[] grid = new ItemStack[9];
+        if (!(block.getState() instanceof Container container)) {
+            return grid;
+        }
+        Inventory inv = container.getInventory();
+        for (int i = 0; i < 9; i++) {
+            grid[i] = inv.getItem(i);
+        }
+        return grid;
+    }
+
+    public List<Hopper> getOutputHoppers(Block block) {
+        return findOutputHoppers(block);
+    }
+
     public void save() {
         List<String> list = positions.stream()
                 .map(AutocraftPos::serialize)
@@ -554,12 +570,31 @@ public final class AutocraftManager {
         for (BlockFace face : outputFaces) {
             Block relative = block.getRelative(face);
 
-            if (relative.getState() instanceof Hopper hopper) {
-                hoppers.add(hopper);
+            if (!(relative.getState() instanceof Hopper hopper)) {
+                continue;
             }
+
+            // Hopper yang mengarah MASUK ke autocraft adalah hopper input,
+            // jangan pernah dipakai sebagai target output.
+            if (isFeedingInto(relative, block)) {
+                continue;
+            }
+
+            hoppers.add(hopper);
         }
 
         return hoppers;
+    }
+
+    private boolean isFeedingInto(Block hopperBlock, Block target) {
+        if (hopperBlock.getBlockData() instanceof org.bukkit.block.data.type.Hopper data) {
+            Block fed = hopperBlock.getRelative(data.getFacing());
+            return fed.getWorld().equals(target.getWorld())
+                    && fed.getX() == target.getX()
+                    && fed.getY() == target.getY()
+                    && fed.getZ() == target.getZ();
+        }
+        return false;
     }
 
     private int totalCapacity(List<Hopper> hoppers, ItemStack stack) {
@@ -656,7 +691,7 @@ public final class AutocraftManager {
         return false;
     }
 
-    public void handleHopperInput(Block destBlock, Inventory source, ItemStack moved) {
+    public void handleHopperInput(Block destBlock, Inventory source, Inventory destination, ItemStack moved) {
         if (moved == null || moved.getType().isAir()) {
             return;
         }
@@ -670,13 +705,7 @@ public final class AutocraftManager {
             return;
         }
 
-        if (!(destBlock.getState() instanceof Container container)) {
-            return;
-        }
-
-        Inventory grid = container.getInventory();
-
-        int planned = calculateAccepted(recipe, grid, moved, moved.getAmount());
+        int planned = calculateAccepted(recipe, destination, moved, moved.getAmount());
         if (planned <= 0) {
             return;
         }
@@ -694,8 +723,7 @@ public final class AutocraftManager {
             return;
         }
 
-        distribute(grid, recipe, moved, actual);
-        container.update(true, false);
+        distribute(destination, recipe, moved, actual);
     }
 
     private int calculateAccepted(AutocraftRecipe recipe, Inventory grid, ItemStack item, int amount) {
@@ -785,4 +813,40 @@ public final class AutocraftManager {
     public int getMinPower() {
         return minPower;
     }
+
+    public List<String> describeAdjacentHoppers(Block block) {
+        List<String> lines = new ArrayList<>();
+
+        for (BlockFace face : SIDES) {
+            Block relative = block.getRelative(face);
+
+            if (!(relative.getState() instanceof Hopper hopper)) {
+                continue;
+            }
+
+            String facing = "?";
+            if (relative.getBlockData() instanceof org.bukkit.block.data.type.Hopper data) {
+                facing = data.getFacing().name();
+            }
+
+            boolean feeding = isFeedingInto(relative, block);
+            boolean locked = relative.isBlockPowered() || relative.getBlockPower() > 0;
+
+            StringBuilder items = new StringBuilder();
+            for (ItemStack item : hopper.getInventory().getContents()) {
+                if (item != null && !item.getType().isAir()) {
+                    if (items.length() > 0) items.append(", ");
+                    items.append(item.getType().name()).append("x").append(item.getAmount());
+                }
+            }
+
+            lines.add(face.name() + ": facing=" + facing
+                    + " input=" + feeding
+                    + " locked=" + locked
+                    + " contents=[" + items + "]");
+        }
+
+        return lines;
+    }
+
 }

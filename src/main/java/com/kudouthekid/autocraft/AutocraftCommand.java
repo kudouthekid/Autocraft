@@ -8,7 +8,8 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabExecutor;
 import org.bukkit.entity.Player;
-
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.block.Hopper;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -38,6 +39,7 @@ public final class AutocraftCommand implements TabExecutor {
             case "remove" -> handleRemove(sender);
             case "recipe" -> handleRecipe(sender);
             case "reload" -> handleReload(sender);
+            case "status" -> handleStatus(sender);
             default -> sendHelp(sender);
         }
 
@@ -179,7 +181,7 @@ public final class AutocraftCommand implements TabExecutor {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-            return filter(List.of("give", "set", "remove", "recipe", "reload"), args[0]);
+            return filter(List.of("give", "set", "remove", "recipe", "reload", "status"), args[0]);
         }
 
         if (args.length == 2 && args[0].equalsIgnoreCase("give")) {
@@ -201,4 +203,77 @@ public final class AutocraftCommand implements TabExecutor {
 
         return result;
     }
+
+    private void handleStatus(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(Component.text("Only players can use this command.", NamedTextColor.RED));
+            return;
+        }
+
+        if (!player.hasPermission("autocraft.use")) {
+            noPermission(player);
+            return;
+        }
+
+        Block target = player.getTargetBlockExact(6);
+        if (target == null || !manager.isAutocraft(target)) {
+            player.sendMessage(Component.text("Target an AutoCraft block.", NamedTextColor.RED));
+            return;
+        }
+
+        player.sendMessage(Component.text("=== AutoCraft Status ===", NamedTextColor.GOLD));
+
+        boolean powered = manager.isPowered(target);
+        player.sendMessage(Component.text(
+                "Powered: " + powered + " (min power: " + manager.getMinPower() + ")",
+                powered ? NamedTextColor.GREEN : NamedTextColor.RED
+        ));
+
+        AutocraftRecipe recipe = manager.getRecipe(target);
+        if (recipe == null) {
+            player.sendMessage(Component.text("Recipe: NONE", NamedTextColor.RED));
+        } else {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 9; i++) {
+                ItemStack item = recipe.pattern()[i];
+                if (item != null && !item.getType().isAir()) {
+                    if (sb.length() > 0) sb.append(", ");
+                    sb.append(i).append(":").append(item.getType().name()).append("x").append(item.getAmount());
+                }
+            }
+            player.sendMessage(Component.text("Recipe grid: " + sb, NamedTextColor.YELLOW));
+            player.sendMessage(Component.text(
+                    "Result: " + recipe.result().getType().name() + " x" + recipe.result().getAmount(),
+                    NamedTextColor.YELLOW
+            ));
+        }
+
+        ItemStack[] grid = manager.getGrid(target);
+        StringBuilder gb = new StringBuilder();
+        int filled = 0;
+        for (int i = 0; i < 9; i++) {
+            ItemStack item = grid[i];
+            if (item != null && !item.getType().isAir()) {
+                filled++;
+                if (gb.length() > 0) gb.append(", ");
+                gb.append(i).append(":").append(item.getType().name()).append("x").append(item.getAmount());
+            }
+        }
+        player.sendMessage(Component.text(
+                "Buffer grid (" + filled + "/9): " + (gb.length() == 0 ? "empty" : gb.toString()),
+                NamedTextColor.AQUA
+        ));
+
+                List<Hopper> hoppers = manager.getOutputHoppers(target);
+        player.sendMessage(Component.text(
+                "Output hoppers found: " + hoppers.size(),
+                hoppers.isEmpty() ? NamedTextColor.RED : NamedTextColor.GREEN
+        ));
+
+        for (String line : manager.describeAdjacentHoppers(target)) {
+            player.sendMessage(Component.text("  " + line, NamedTextColor.GRAY));
+        }
+    
+      }
+      
 }

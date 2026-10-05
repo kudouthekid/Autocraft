@@ -116,18 +116,29 @@ public final class AutocraftListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH)
     public void onClick(InventoryClickEvent event) {
-        if (!(event.getInventory().getHolder() instanceof RecipeGuiHolder)) {
+        // 1. Cek apakah inventory yang terbuka di layar (Top Inventory) adalah GUI AutoCraft
+        if (!(event.getView().getTopInventory().getHolder() instanceof RecipeGuiHolder)) {
             return;
         }
-
-        event.setCancelled(true);
 
         Inventory clicked = event.getClickedInventory();
-        if (clicked == null || !(clicked.getHolder() instanceof RecipeGuiHolder)) {
+
+        // 2. Jika player mengklik inventory mereka sendiri (bagian bawah / hotbar)
+        if (clicked == null || clicked == event.getView().getBottomInventory()) {
+            // Cegah shift-click dari inventory player masuk langsung ke GUI AutoCraft
+            if (event.isShiftClick()) {
+                event.setCancelled(true);
+            }
+            // Biarkan player mengambil/memindahkan item di inventory mereka secara normal
             return;
         }
 
+        // 3. Mulai dari sini, player mengklik inventory GUI AutoCraft (Top Inventory)
+        event.setCancelled(true); // Default: batalkan semua klik di GUI untuk keamanan
+
         int rawSlot = event.getRawSlot();
+        
+        // Jika mengklik slot yang tidak diperbolehkan (misal: kaca pembatas / filler)
         if (!RecipeGui.isAllowed(rawSlot)) {
             return;
         }
@@ -139,8 +150,10 @@ public final class AutocraftListener implements Listener {
         boolean currentGhost = manager.isGhost(current);
         boolean cursorEmpty = cursor == null || cursor.getType().isAir();
 
+        // Logika untuk item Ghost (cetakan resep)
         if (currentGhost) {
             if (!cursorEmpty) {
+                // Menimpa ghost dengan item asli dari cursor
                 if (click == ClickType.LEFT) {
                     clicked.setItem(rawSlot, cursor.clone());
                     event.setCursor(new ItemStack(Material.AIR));
@@ -160,22 +173,50 @@ public final class AutocraftListener implements Listener {
                     }
                 }
             } else if (click == ClickType.RIGHT && event.getWhoClicked().isSneaking()) {
+                // Sneak + Right Click untuk menghapus ghost
                 clicked.setItem(rawSlot, null);
             }
-
             return;
         }
 
+        // Logika untuk slot kosong atau item asli (bukan ghost)
+        // Izinkan klik normal (kiri/kanan) jika bukan shift-click
         if (!event.isShiftClick() && (click == ClickType.LEFT || click == ClickType.RIGHT)) {
+            event.setCancelled(false);
+        }
+        
+        // Izinkan shift-click DARI GUI ke inventory player (untuk memindahkan item keluar dari GUI)
+        if (event.isShiftClick()) {
             event.setCancelled(false);
         }
     }
 
     @EventHandler
     public void onDrag(InventoryDragEvent event) {
-        if (event.getInventory().getHolder() instanceof RecipeGuiHolder) {
-            event.setCancelled(true);
+        if (!(event.getView().getTopInventory().getHolder() instanceof RecipeGuiHolder)) {
+            return;
         }
+
+        int topSize = event.getView().getTopInventory().getSize();
+
+        // Cek semua slot yang terkena efek drag
+        for (int rawSlot : event.getRawSlots()) {
+            // Jika slot berada di dalam GUI AutoCraft (Top Inventory)
+            if (rawSlot < topSize) {
+                // Batalkan jika mencoba men-drag ke slot kaca/filler
+                if (!RecipeGui.isAllowed(rawSlot)) {
+                    event.setCancelled(true);
+                    return;
+                }
+                // Batalkan jika mencoba men-drag menimpa item Ghost
+                ItemStack current = event.getView().getTopInventory().getItem(rawSlot);
+                if (manager.isGhost(current)) {
+                    event.setCancelled(true);
+                    return;
+                }
+            }
+        }
+        // Jika semua slot yang di-drag valid, biarkan vanilla menanganinya (event tidak dibatalkan)
     }
 
     @EventHandler
@@ -253,7 +294,7 @@ public final class AutocraftListener implements Listener {
                     return;
                 }
 
-                manager.handleHopperInput(destBlock, source, event.getItem());
+                manager.handleHopperInput(destBlock, source, event.getDestination(), event.getItem());
                 return;
             }
         }
