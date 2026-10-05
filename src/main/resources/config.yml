@@ -1,0 +1,30 @@
+# Material yang dipakai sebagai block AutoCraft.
+# Sangat disarankan BARREL karena memiliki inventory dan bisa menerima hopper.
+block-material: BARREL
+
+# Daya redstone minimum agar mesin dianggap aktif.
+# 0 = selalu aktif
+# 1 = butuh sinyal redstone apa pun
+# 15 = butuh power penuh
+min-redstone-power: 1
+
+# Jika true, hopper hanya bisa memasukkan item saat mesin mendapat power cukup.
+input-requires-power: true
+
+# Interval pengecekan crafting dalam tick.
+# 20 tick = 1 detik.
+craft-interval-ticks: 10
+
+# Sisi input hopper.
+# Kosongkan [] untuk mengizinkan semua sisi.
+# Pilihan: NORTH, EAST, SOUTH, WEST, UP, DOWN
+input-faces: []
+
+# Sisi output hopper.
+# Kosongkan [] untuk mengizinkan semua sisi.
+# Pilihan: NORTH, EAST, SOUTH, WEST, UP, DOWN
+output-faces: []
+
+# Lokasi block AutoCraft tersimpan otomatis.
+# Jangan diubah kecuali tahu apa yang dilakukan.
+locations: []

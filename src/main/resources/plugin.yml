@@ -1,0 +1,32 @@
+name: AutoCraft
+version: "${version}"
+main: com.example.autocraft.AutoCraftPlugin
+api-version: "1.26"
+description: Menambahkan block autocraft otomatis dengan input hopper, output hopper, dan kontrol redstone.
+
+commands:
+  autocraft:
+    description: Command utama AutoCraft.
+    usage: /autocraft help
+    permission: autocraft.use
+
+permissions:
+  autocraft.use:
+    description: Izin dasar memakai command /autocraft.
+    default: true
+
+  autocraft.configure:
+    description: Izin mengatur resep AutoCraft.
+    default: op
+
+  autocraft.break:
+    description: Izin menghancurkan block AutoCraft.
+    default: op
+
+  autocraft.admin:
+    description: Izin admin AutoCraft.
+    default: op
+    children:
+      autocraft.use: true
+      autocraft.configure: true
+      autocraft.break: true
