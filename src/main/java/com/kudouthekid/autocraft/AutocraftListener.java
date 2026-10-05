@@ -107,7 +107,7 @@ public final class AutocraftListener implements Listener {
 
     @EventHandler
     public void onChunkLoad(ChunkLoadEvent event) {
-        for (BlockState state : event.getChunk().getTileStates()) {
+        for (BlockState state : event.getChunk().getTileEntities()) {
             if (state.getType() == manager.getBlockMaterial()) {
                 manager.isAutocraft(state.getBlock());
             }

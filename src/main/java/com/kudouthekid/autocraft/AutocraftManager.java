@@ -128,7 +128,7 @@ public final class AutocraftManager {
     public void scanLoadedChunks() {
         for (World world : Bukkit.getWorlds()) {
             for (Chunk chunk : world.getLoadedChunks()) {
-                for (BlockState state : chunk.getTileStates()) {
+                for (BlockState state : chunk.getTileEntities()) {
                     if (state.getType() == blockMaterial) {
                         isAutocraft(state.getBlock());
                     }
