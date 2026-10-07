@@ -18,6 +18,10 @@ import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.Recipe;
+import org.bukkit.inventory.RecipeChoice;
+import org.bukkit.inventory.ShapedRecipe;
+import org.bukkit.inventory.ShapelessRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 
@@ -34,14 +38,9 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class AutocraftManager {
 
     private static final BlockFace[] SIDES = {
-            BlockFace.NORTH,
-            BlockFace.EAST,
-            BlockFace.SOUTH,
-            BlockFace.WEST,
-            BlockFace.UP,
-            BlockFace.DOWN
+            BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH,
+            BlockFace.WEST, BlockFace.UP, BlockFace.DOWN
     };
-
     private static final Set<BlockFace> SIDE_SET = EnumSet.copyOf(Arrays.asList(SIDES));
 
     private final AutoCraftPlugin plugin;
@@ -51,6 +50,8 @@ public final class AutocraftManager {
     private final NamespacedKey recipeKey;
     private final NamespacedKey itemKey;
     private final NamespacedKey ghostKey;
+    private final NamespacedKey inputChestKey;
+    private final NamespacedKey outputChestKey;
 
     private Material blockMaterial = Material.BARREL;
     private int minPower = 1;
@@ -64,57 +65,29 @@ public final class AutocraftManager {
         this.recipeKey = new NamespacedKey(plugin, "autocraft_recipe");
         this.itemKey = new NamespacedKey(plugin, "autocraft_item");
         this.ghostKey = new NamespacedKey(plugin, "autocraft_gui_ghost");
+        this.inputChestKey = new NamespacedKey(plugin, "autocraft_input_chest");
+        this.outputChestKey = new NamespacedKey(plugin, "autocraft_output_chest");
     }
 
     public void load() {
         positions.clear();
-
         for (String entry : plugin.getConfig().getStringList("locations")) {
-            try {
-                positions.add(AutocraftPos.parse(entry));
-            } catch (Exception ex) {
-                plugin.getLogger().warning("Skipping invalid location entry: " + entry);
-            }
+            try { positions.add(AutocraftPos.parse(entry)); }
+            catch (Exception ex) { plugin.getLogger().warning("Skipping invalid location entry: " + entry); }
         }
-
         reloadSettings();
     }
 
-    public ItemStack[] getGrid(Block block) {
-        ItemStack[] grid = new ItemStack[9];
-        if (!(block.getState() instanceof Container container)) {
-            return grid;
-        }
-        Inventory inv = container.getInventory();
-        for (int i = 0; i < 9; i++) {
-            grid[i] = inv.getItem(i);
-        }
-        return grid;
-    }
-
-    public List<Hopper> getOutputHoppers(Block block) {
-        return findOutputHoppers(block);
-    }
-
     public void save() {
-        List<String> list = positions.stream()
-                .map(AutocraftPos::serialize)
-                .toList();
-
+        List<String> list = positions.stream().map(AutocraftPos::serialize).toList();
         plugin.getConfig().set("locations", list);
         plugin.saveConfig();
     }
 
     public void reloadSettings() {
         FileConfiguration config = plugin.getConfig();
-
         Material material = Material.matchMaterial(config.getString("block-material", "BARREL"));
-        if (material != null && material.isBlock()) {
-            this.blockMaterial = material;
-        } else {
-            this.blockMaterial = Material.BARREL;
-        }
-
+        this.blockMaterial = (material != null && material.isBlock()) ? material : Material.BARREL;
         this.minPower = Math.max(0, Math.min(15, config.getInt("min-redstone-power", 1)));
         this.inputRequiresPower = config.getBoolean("input-requires-power", true);
         this.inputFaces = parseFaces(config.getStringList("input-faces"));
@@ -123,31 +96,20 @@ public final class AutocraftManager {
 
     private Set<BlockFace> parseFaces(List<String> values) {
         EnumSet<BlockFace> faces = EnumSet.noneOf(BlockFace.class);
-
         for (String value : values) {
             try {
                 BlockFace face = BlockFace.valueOf(value.toUpperCase(Locale.ROOT));
-                if (SIDE_SET.contains(face)) {
-                    faces.add(face);
-                }
-            } catch (IllegalArgumentException ignored) {
-            }
+                if (SIDE_SET.contains(face)) faces.add(face);
+            } catch (IllegalArgumentException ignored) {}
         }
-
-        if (faces.isEmpty()) {
-            return EnumSet.copyOf(SIDE_SET);
-        }
-
-        return faces;
+        return faces.isEmpty() ? EnumSet.copyOf(SIDE_SET) : faces;
     }
 
     public void scanLoadedChunks() {
         for (World world : Bukkit.getWorlds()) {
             for (Chunk chunk : world.getLoadedChunks()) {
                 for (BlockState state : chunk.getTileEntities()) {
-                    if (state.getType() == blockMaterial) {
-                        isAutocraft(state.getBlock());
-                    }
+                    if (state.getType() == blockMaterial) isAutocraft(state.getBlock());
                 }
             }
         }
@@ -156,261 +118,75 @@ public final class AutocraftManager {
     public ItemStack createItem() {
         ItemStack item = new ItemStack(blockMaterial);
         ItemMeta meta = item.getItemMeta();
-
         if (meta != null) {
             meta.displayName(Component.text("AutoCraft Block", NamedTextColor.GOLD));
-            meta.lore(List.of(
-                    Component.text("Place, then shift + right-click to set recipe.", NamedTextColor.GRAY),
-                    Component.text("Requires enough redstone power.", NamedTextColor.GRAY)
-            ));
-
             meta.getPersistentDataContainer().set(itemKey, PersistentDataType.BYTE, (byte) 1);
             item.setItemMeta(meta);
         }
-
         return item;
     }
 
     public boolean isAutocraftItem(ItemStack item) {
-        return item != null
-                && item.hasItemMeta()
+        return item != null && item.hasItemMeta()
                 && item.getItemMeta().getPersistentDataContainer().has(itemKey, PersistentDataType.BYTE);
     }
 
     public boolean create(Block block) {
-        if (block == null || block.getType() != blockMaterial) {
-            return false;
-        }
-
-        if (isAutocraft(block)) {
-            return false;
-        }
-
-        if (!(block.getState() instanceof TileState tile)) {
-            return false;
-        }
-
+        if (block == null || block.getType() != blockMaterial || isAutocraft(block)) return false;
+        if (!(block.getState() instanceof TileState tile)) return false;
         tile.getPersistentDataContainer().set(flagKey, PersistentDataType.BYTE, (byte) 1);
         tile.update(true, false);
-
         positions.add(AutocraftPos.of(block.getLocation()));
         save();
         return true;
     }
 
     public boolean remove(Block block, boolean dropItem) {
-        if (block == null || !isAutocraft(block)) {
-            return false;
-        }
-
+        if (block == null || !isAutocraft(block)) return false;
         clearInventory(block);
-
         if (block.getState() instanceof TileState tile) {
             tile.getPersistentDataContainer().remove(flagKey);
             tile.getPersistentDataContainer().remove(recipeKey);
+            tile.getPersistentDataContainer().remove(inputChestKey);
+            tile.getPersistentDataContainer().remove(outputChestKey);
             tile.update(true, false);
         }
-
         positions.remove(AutocraftPos.of(block.getLocation()));
         save();
-
-        if (dropItem) {
-            block.getWorld().dropItemNaturally(block.getLocation(), createItem());
-        }
-
+        if (dropItem) block.getWorld().dropItemNaturally(block.getLocation(), createItem());
         return true;
     }
 
     public void dropContents(Block block) {
-        if (!(block.getState(false) instanceof Container container)) {
-            return;
-        }
-        Inventory inventory = container.getInventory();
-        for (ItemStack item : inventory.getContents()) {
-            if (item != null && !item.getType().isAir()) {
-                block.getWorld().dropItemNaturally(block.getLocation(), item.clone());
+        if (block.getState(false) instanceof Container container) {
+            for (ItemStack item : container.getInventory().getContents()) {
+                if (item != null && !item.getType().isAir())
+                    block.getWorld().dropItemNaturally(block.getLocation(), item.clone());
             }
+            container.getInventory().clear();
         }
-        inventory.clear();
     }
 
     public void clearInventory(Block block) {
-        if (!(block.getState(false) instanceof Container container)) {
-            return;
-        }
-        container.getInventory().clear();
+        if (block.getState(false) instanceof Container container) container.getInventory().clear();
     }
 
     public boolean isAutocraft(Block block) {
-        if (block == null || block.getType() != blockMaterial) {
-            return false;
-        }
-
-        if (!hasFlag(block)) {
-            positions.remove(AutocraftPos.of(block.getLocation()));
-            return false;
-        }
-
+        if (block == null || block.getType() != blockMaterial) return false;
+        if (!hasFlag(block)) { positions.remove(AutocraftPos.of(block.getLocation())); return false; }
         positions.add(AutocraftPos.of(block.getLocation()));
         return true;
     }
 
     private boolean hasFlag(Block block) {
-        if (!(block.getState() instanceof TileState tile)) {
-            return false;
-        }
-
-        return tile.getPersistentDataContainer().has(flagKey, PersistentDataType.BYTE);
+        return block.getState() instanceof TileState tile
+                && tile.getPersistentDataContainer().has(flagKey, PersistentDataType.BYTE);
     }
 
-    public AutocraftRecipe getRecipe(Block block) {
-        if (!(block.getState() instanceof TileState tile)) {
-            return null;
-        }
-
-        String data = tile.getPersistentDataContainer().get(recipeKey, PersistentDataType.STRING);
-        if (data == null || data.isEmpty()) {
-            return null;
-        }
-
-        try {
-            ItemStack[] loaded = SerializationUtil.fromBase64(data);
-            if (loaded.length != 10) {
-                return null;
-            }
-
-            ItemStack[] pattern = Arrays.copyOf(loaded, 9);
-            ItemStack result = loaded[9];
-
-            if (result == null || result.getType().isAir()) {
-                return null;
-            }
-
-            boolean allEmpty = Arrays.stream(pattern)
-                    .allMatch(item -> item == null || item.getType().isAir());
-
-            if (allEmpty) {
-                return null;
-            }
-
-            return new AutocraftRecipe(pattern, result);
-        } catch (Exception ex) {
-            plugin.getLogger().warning("Failed to load AutoCraft recipe at " + block.getLocation());
-            return null;
-        }
-    }
-
-    public void setRecipe(Block block, ItemStack[] pattern, ItemStack result) {
-        if (!(block.getState() instanceof TileState tile)) {
-            return;
-        }
-
-        ItemStack[] safePattern = new ItemStack[9];
-        if (pattern != null) {
-            for (int i = 0; i < Math.min(9, pattern.length); i++) {
-                safePattern[i] = cleanRecipeItem(pattern[i]);
-            }
-        }
-
-        ItemStack cleanResult = cleanRecipeItem(result);
-
-        boolean empty = cleanResult == null
-                || cleanResult.getType().isAir()
-                || Arrays.stream(safePattern).allMatch(item -> item == null || item.getType().isAir());
-
-        AutocraftRecipe oldRecipe = getRecipe(block);
-        boolean changed = !recipeEquals(oldRecipe, safePattern, empty ? null : cleanResult);
-
-        if (empty) {
-            tile.getPersistentDataContainer().remove(recipeKey);
-        } else {
-            ItemStack[] serialized = new ItemStack[10];
-
-            for (int i = 0; i < 9; i++) {
-                serialized[i] = safePattern[i] == null ? null : safePattern[i].clone();
-            }
-
-            serialized[9] = cleanResult.clone();
-
-            tile.getPersistentDataContainer().set(
-                    recipeKey,
-                    PersistentDataType.STRING,
-                    SerializationUtil.toBase64(serialized)
-            );
-        }
-
-        tile.update(true, false);
-
-        if (changed) {
-            dropContents(block);
-        }
-    }
-
-    private boolean recipeEquals(AutocraftRecipe old, ItemStack[] pattern, ItemStack result) {
-        boolean newEmpty = result == null
-                || result.getType().isAir()
-                || Arrays.stream(pattern).allMatch(item -> item == null || item.getType().isAir());
-
-        if (old == null) {
-            return newEmpty;
-        }
-
-        if (newEmpty) {
-            return false;
-        }
-
-        if (!old.result().isSimilar(result) || old.result().getAmount() != result.getAmount()) {
-            return false;
-        }
-
-        for (int i = 0; i < 9; i++) {
-            ItemStack a = old.pattern()[i];
-            ItemStack b = pattern[i];
-
-            boolean aEmpty = a == null || a.getType().isAir();
-            boolean bEmpty = b == null || b.getType().isAir();
-
-            if (aEmpty && bEmpty) {
-                continue;
-            }
-
-            if (aEmpty || bEmpty) {
-                return false;
-            }
-
-            if (!a.isSimilar(b) || a.getAmount() != b.getAmount()) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private ItemStack cleanRecipeItem(ItemStack item) {
-        if (item == null || item.getType().isAir()) {
-            return null;
-        }
-
-        ItemStack clone = item.clone();
-        ItemMeta meta = clone.getItemMeta();
-
-        if (meta != null) {
-            meta.getPersistentDataContainer().remove(ghostKey);
-            clone.setItemMeta(meta);
-        }
-
-        return clone;
-    }
-
-    public void openRecipeGui(Player player, Block block) {
-        RecipeGui.open(plugin, player, block, getRecipe(block));
-    }
+    // ==================== GHOST ITEM SYSTEM (fix duplikasi) ====================
 
     public void markGhost(ItemStack item) {
-        if (item == null || item.getType().isAir()) {
-            return;
-        }
-
+        if (item == null || item.getType().isAir()) return;
         ItemMeta meta = item.getItemMeta();
         if (meta != null) {
             meta.getPersistentDataContainer().set(ghostKey, PersistentDataType.BYTE, (byte) 1);
@@ -419,131 +195,265 @@ public final class AutocraftManager {
     }
 
     public boolean isGhost(ItemStack item) {
-        return item != null
-                && item.hasItemMeta()
+        return item != null && item.hasItemMeta()
                 && item.getItemMeta().getPersistentDataContainer().has(ghostKey, PersistentDataType.BYTE);
     }
 
+    private ItemStack cleanRecipeItem(ItemStack item) {
+        if (item == null || item.getType().isAir()) return null;
+        ItemStack clone = item.clone();
+        ItemMeta meta = clone.getItemMeta();
+        if (meta != null) {
+            meta.getPersistentDataContainer().remove(ghostKey);
+            clone.setItemMeta(meta);
+        }
+        return clone;
+    }
+
+    // ==================== CHEST LINKING ====================
+
+    public boolean isLinkableContainer(Block block) {
+        if (block == null) return false;
+        return block.getState() instanceof Container;
+    }
+
+    public boolean linkChest(Block crafterBlock, Block chestBlock, boolean isOutput) {
+        if (!isAutocraft(crafterBlock)) return false;
+        if (!(crafterBlock.getState() instanceof TileState tile)) return false;
+        if (!isLinkableContainer(chestBlock)) return false;
+
+        NamespacedKey key = isOutput ? outputChestKey : inputChestKey;
+        String pos = AutocraftPos.of(chestBlock.getLocation()).serialize();
+        tile.getPersistentDataContainer().set(key, PersistentDataType.STRING, pos);
+        tile.update(true, false);
+        return true;
+    }
+
+    public boolean unlinkChest(Block crafterBlock, boolean isOutput) {
+        if (!isAutocraft(crafterBlock)) return false;
+        if (!(crafterBlock.getState() instanceof TileState tile)) return false;
+
+        NamespacedKey key = isOutput ? outputChestKey : inputChestKey;
+        if (!tile.getPersistentDataContainer().has(key, PersistentDataType.STRING)) return false;
+
+        tile.getPersistentDataContainer().remove(key);
+        tile.update(true, false);
+        return true;
+    }
+
+    public Block getLinkedChest(Block crafterBlock, boolean isOutput) {
+        if (!(crafterBlock.getState() instanceof TileState tile)) return null;
+
+        NamespacedKey key = isOutput ? outputChestKey : inputChestKey;
+        String posStr = tile.getPersistentDataContainer().get(key, PersistentDataType.STRING);
+        if (posStr == null || posStr.isEmpty()) return null;
+
+        try {
+            AutocraftPos pos = AutocraftPos.parse(posStr);
+            Location loc = pos.toLocation();
+            if (loc == null || !loc.isChunkLoaded()) return null;
+
+            Block chestBlock = loc.getBlock();
+            if (!(chestBlock.getState() instanceof Container)) {
+                // Chest sudah hancur → auto-unlink
+                tile.getPersistentDataContainer().remove(key);
+                tile.update(true, false);
+                return null;
+            }
+            return chestBlock;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    // ==================== RECIPE ====================
+
+    public AutocraftRecipe getRecipe(Block block) {
+        if (!(block.getState() instanceof TileState tile)) return null;
+        String data = tile.getPersistentDataContainer().get(recipeKey, PersistentDataType.STRING);
+        if (data == null || data.isEmpty()) return null;
+        try {
+            ItemStack[] loaded = SerializationUtil.fromBase64(data);
+            if (loaded.length != 10) return null;
+            ItemStack[] pattern = Arrays.copyOf(loaded, 9);
+            ItemStack result = loaded[9];
+            if (result == null || result.getType().isAir()) return null;
+            if (Arrays.stream(pattern).allMatch(i -> i == null || i.getType().isAir())) return null;
+            return new AutocraftRecipe(pattern, result);
+        } catch (Exception ex) { return null; }
+    }
+
+    public void setRecipe(Block block, ItemStack[] pattern, ItemStack result) {
+        if (!(block.getState() instanceof TileState tile)) return;
+        ItemStack[] safePattern = new ItemStack[9];
+        if (pattern != null) {
+            for (int i = 0; i < 9; i++) safePattern[i] = cleanRecipeItem(pattern[i]);
+        }
+        ItemStack cleanResult = cleanRecipeItem(result);
+        boolean empty = cleanResult == null || cleanResult.getType().isAir()
+                || Arrays.stream(safePattern).allMatch(i -> i == null || i.getType().isAir());
+        if (empty) {
+            tile.getPersistentDataContainer().remove(recipeKey);
+        } else {
+            ItemStack[] serialized = new ItemStack[10];
+            for (int i = 0; i < 9; i++) serialized[i] = safePattern[i];
+            serialized[9] = cleanResult;
+            tile.getPersistentDataContainer().set(
+                    recipeKey, PersistentDataType.STRING,
+                    SerializationUtil.toBase64(serialized));
+        }
+        tile.update(true, false);
+    }
+
+    public void openRecipeGui(Player player, Block block) {
+        RecipeGui.open(plugin, player, block, getRecipe(block));
+    }
+
+    // ==================== POWER & TICK ====================
+
     public boolean isPowered(Block block) {
         int power = block.getBlockPower();
-
-        if (block.isBlockIndirectlyPowered()) {
-            power = Math.max(power, 15);
-        }
-
+        if (block.isBlockIndirectlyPowered()) power = Math.max(power, 15);
         return power >= minPower;
     }
 
     public void tickAll() {
         Iterator<AutocraftPos> iterator = positions.iterator();
-
         while (iterator.hasNext()) {
             AutocraftPos pos = iterator.next();
             Location location = pos.toLocation();
-
-            if (location == null || !location.isChunkLoaded()) {
-                continue;
-            }
-
+            if (location == null || !location.isChunkLoaded()) continue;
             Block block = location.getBlock();
-
-            if (block.getType() != blockMaterial || !hasFlag(block)) {
-                iterator.remove();
-                continue;
-            }
-
-            if (!isPowered(block)) {
-                continue;
-            }
-
-            try {
-              attemptCraft(block);
-              } catch (Exception ex) {
-                  plugin.getLogger().warning("AutoCraft: craft failed at " + location + ": " + ex);
-              }
+            if (block.getType() != blockMaterial || !hasFlag(block)) { iterator.remove(); continue; }
+            if (!isPowered(block)) continue;
+            try { attemptCraft(block); } catch (Exception ignored) {}
         }
     }
 
     public void attemptCraft(Block block) {
         AutocraftRecipe recipe = getRecipe(block);
-        if (recipe == null) {
-            return;
-        }
-
-        // PENTING: getState(false) = live state (Paper).
-        // Perubahan inventory langsung menempel ke tile entity, tanpa update().
-        if (!(block.getState(false) instanceof Container container)) {
-            return;
-        }
-
+        if (recipe == null || !(block.getState(false) instanceof Container container)) return;
         Inventory inventory = container.getInventory();
 
         if (!hasIngredients(inventory, recipe)) {
-            return;
+            pullIngredients(block, inventory, recipe);
+            if (!hasIngredients(inventory, recipe)) return;
         }
 
         ItemStack result = recipe.result().clone();
-        if (result.getAmount() <= 0) {
-            result.setAmount(1);
-        }
 
+        // Cek kapasitas output: chest output dulu, baru hopper
+        Block outputChest = getLinkedChest(block, true);
         List<Hopper> hoppers = findOutputHoppers(block);
-        if (totalCapacity(hoppers, result) < result.getAmount()) {
-            return;
+
+        int totalSpace = 0;
+        Inventory outputChestInv = null;
+        if (outputChest != null && outputChest.getState(false) instanceof Container oc) {
+            outputChestInv = oc.getInventory();
+            totalSpace += freeSpace(outputChestInv, result);
         }
+        totalSpace += totalCapacity(hoppers, result);
+
+        if (totalSpace < result.getAmount()) return;
 
         consumeIngredients(inventory, recipe);
-        deliver(block, hoppers, result);
+        deliver(block, outputChestInv, hoppers, result);
     }
 
     private boolean hasIngredients(Inventory inventory, AutocraftRecipe recipe) {
         for (int i = 0; i < 9; i++) {
             ItemStack required = recipe.pattern()[i];
             ItemStack current = inventory.getItem(i);
-
             if (required == null || required.getType().isAir()) {
-                if (current != null && !current.getType().isAir()) {
-                    return false;
-                }
+                if (current != null && !current.getType().isAir()) return false;
             } else {
-                if (current == null || current.getType().isAir()) {
-                    return false;
-                }
+                if (current == null || current.getType().isAir() || !required.isSimilar(current)) return false;
+                if (current.getAmount() < requiredAmount(required)) return false;
+            }
+        }
+        return true;
+    }
 
-                if (!required.isSimilar(current)) {
-                    return false;
-                }
+    private void pullIngredients(Block block, Inventory inventory, AutocraftRecipe recipe) {
+        // PRIORITAS 1: Input chest yang ter-link
+        Block inputChest = getLinkedChest(block, false);
+        if (inputChest != null && inputChest.getState(false) instanceof Container ic) {
+            pullFromInventory(inventory, ic.getInventory(), recipe);
+        }
 
-                if (current.getAmount() < requiredAmount(required)) {
-                    return false;
+        // PRIORITAS 2: Buffer internal (slot 9-26)
+        pullFromSelf(inventory, recipe);
+
+        // PRIORITAS 3: Hopper input
+        List<Hopper> inputHoppers = findInputHoppers(block);
+        for (Hopper hopper : inputHoppers) {
+            pullFromInventory(inventory, hopper.getInventory(), recipe);
+        }
+    }
+
+    private void pullFromSelf(Inventory inventory, AutocraftRecipe recipe) {
+        for (int i = 0; i < 9; i++) {
+            ItemStack required = recipe.pattern()[i];
+            if (required == null || required.getType().isAir()) continue;
+            ItemStack current = inventory.getItem(i);
+            int needed = requiredAmount(required);
+            int currentAmount = (current != null && required.isSimilar(current)) ? current.getAmount() : 0;
+            if (currentAmount >= needed) continue;
+            if (current != null && !required.isSimilar(current)) continue;
+            int toPull = needed - currentAmount;
+
+            for (int slot = 9; slot < inventory.getSize() && toPull > 0; slot++) {
+                ItemStack selfItem = inventory.getItem(slot);
+                if (selfItem != null && required.isSimilar(selfItem)) {
+                    int take = Math.min(toPull, selfItem.getAmount());
+                    if (current == null) {
+                        ItemStack moved = selfItem.clone(); moved.setAmount(take);
+                        inventory.setItem(i, moved); current = moved;
+                    } else { current.setAmount(current.getAmount() + take); }
+                    selfItem.setAmount(selfItem.getAmount() - take);
+                    if (selfItem.getAmount() <= 0) inventory.setItem(slot, null);
+                    toPull -= take;
                 }
             }
         }
+    }
 
-        return true;
+    private void pullFromInventory(Inventory target, Inventory source, AutocraftRecipe recipe) {
+        for (int i = 0; i < 9; i++) {
+            ItemStack required = recipe.pattern()[i];
+            if (required == null || required.getType().isAir()) continue;
+            ItemStack current = target.getItem(i);
+            int needed = requiredAmount(required);
+            int currentAmount = (current != null && required.isSimilar(current)) ? current.getAmount() : 0;
+            if (currentAmount >= needed) continue;
+            if (current != null && !required.isSimilar(current)) continue;
+            int toPull = needed - currentAmount;
+
+            for (int slot = 0; slot < source.getSize() && toPull > 0; slot++) {
+                ItemStack sourceItem = source.getItem(slot);
+                if (sourceItem != null && required.isSimilar(sourceItem)) {
+                    int take = Math.min(toPull, sourceItem.getAmount());
+                    ItemStack pulled = sourceItem.clone(); pulled.setAmount(take);
+                    if (current == null) { target.setItem(i, pulled); current = pulled; }
+                    else { current.setAmount(current.getAmount() + take); }
+                    sourceItem.setAmount(sourceItem.getAmount() - take);
+                    if (sourceItem.getAmount() <= 0) source.setItem(slot, null);
+                    toPull -= take;
+                }
+            }
+        }
     }
 
     private void consumeIngredients(Inventory inventory, AutocraftRecipe recipe) {
         for (int i = 0; i < 9; i++) {
             ItemStack required = recipe.pattern()[i];
             ItemStack current = inventory.getItem(i);
-
             if (required == null || required.getType().isAir()) {
-                if (current != null && !current.getType().isAir()) {
-                    inventory.setItem(i, null);
-                }
+                if (current != null && !current.getType().isAir()) inventory.setItem(i, null);
             } else {
-                if (current == null || current.getType().isAir()) {
-                    continue;
-                }
-
-                int need = requiredAmount(required);
-                int newAmount = current.getAmount() - need;
-
-                if (newAmount <= 0) {
-                    inventory.setItem(i, null);
-                } else {
-                    current.setAmount(newAmount);
+                if (current != null && !current.getType().isAir()) {
+                    int newAmount = current.getAmount() - requiredAmount(required);
+                    inventory.setItem(i, newAmount <= 0 ? null : new ItemStack(current.getType(), newAmount));
                 }
             }
         }
@@ -551,36 +461,27 @@ public final class AutocraftManager {
 
     private int requiredAmount(ItemStack required) {
         int amount = required.getAmount();
-        if (amount <= 0) {
-            amount = 1;
-        }
-
-        int max = required.getMaxStackSize();
-        if (max <= 0) {
-            max = 64;
-        }
-
-        return Math.min(amount, max);
+        return amount <= 0 ? 1 : Math.min(amount, required.getMaxStackSize());
     }
 
-        private List<Hopper> findOutputHoppers(Block block) {
+    // ==================== HOPPER LOGIC ====================
+
+    public List<Hopper> findInputHoppers(Block block) {
         List<Hopper> hoppers = new ArrayList<>();
-
-        for (BlockFace face : outputFaces) {
+        for (BlockFace face : inputFaces) {
             Block relative = block.getRelative(face);
-
-            // live state, supaya inventory hopper di deliver() adalah inventory dunia nyata
-            if (!(relative.getState(false) instanceof Hopper hopper)) {
-                continue;
-            }
-
-            if (isFeedingInto(relative, block)) {
-                continue;
-            }
-
-            hoppers.add(hopper);
+            if (!(relative.getState(false) instanceof Hopper hopper)) continue;
+            if (isFeedingInto(relative, block)) hoppers.add(hopper);
         }
+        return hoppers;
+    }
 
+    public List<Hopper> findOutputHoppers(Block block) {
+        List<Hopper> hoppers = new ArrayList<>();
+        if (outputFaces.contains(BlockFace.DOWN)) {
+            Block relative = block.getRelative(BlockFace.DOWN);
+            if (relative.getState(false) instanceof Hopper hopper) hoppers.add(hopper);
+        }
         return hoppers;
     }
 
@@ -597,239 +498,92 @@ public final class AutocraftManager {
 
     private int totalCapacity(List<Hopper> hoppers, ItemStack stack) {
         int total = 0;
-
-        for (Hopper hopper : hoppers) {
-            total += freeSpace(hopper.getInventory(), stack);
-        }
-
+        for (Hopper hopper : hoppers) total += freeSpace(hopper.getInventory(), stack);
         return total;
     }
 
     private int freeSpace(Inventory inventory, ItemStack stack) {
-        int max = stack.getMaxStackSize();
-        if (max <= 0) {
-            max = 64;
-        }
-
+        int max = stack.getMaxStackSize() <= 0 ? 64 : stack.getMaxStackSize();
         int space = 0;
-
         for (ItemStack slot : inventory.getContents()) {
-            if (slot == null || slot.getType().isAir()) {
-                space += max;
-            } else if (slot.isSimilar(stack)) {
-                space += Math.max(0, max - slot.getAmount());
-            }
+            if (slot == null || slot.getType().isAir()) space += max;
+            else if (slot.isSimilar(stack)) space += Math.max(0, max - slot.getAmount());
         }
-
         return space;
     }
 
-    private void deliver(Block origin, List<Hopper> hoppers, ItemStack result) {
+    /**
+     * Kirim hasil craft: output chest dulu → hopper → drop
+     */
+    private void deliver(Block origin, Inventory outputChestInv, List<Hopper> hoppers, ItemStack result) {
         ItemStack remaining = result.clone();
 
-        int max = remaining.getMaxStackSize();
-        if (max <= 0) {
-            max = 64;
+        // 1. Coba masukkan ke output chest
+        if (outputChestInv != null) {
+            remaining = tryAddToInventory(outputChestInv, remaining);
         }
 
-        while (remaining.getAmount() > 0) {
-            boolean addedAny = false;
-
+        // 2. Kalau masih sisa, coba ke hopper output
+        if (remaining != null && remaining.getAmount() > 0) {
             for (Hopper hopper : hoppers) {
-                if (remaining.getAmount() <= 0) {
-                    break;
-                }
-
-                Inventory inventory = hopper.getInventory();
-                int space = freeSpace(inventory, remaining);
-
-                if (space <= 0) {
-                    continue;
-                }
-
-                int addAmount = Math.min(max, Math.min(space, remaining.getAmount()));
-                if (addAmount <= 0) {
-                    continue;
-                }
-
-                ItemStack toAdd = remaining.clone();
-                toAdd.setAmount(addAmount);
-
-                Map<Integer, ItemStack> leftoverMap = inventory.addItem(toAdd);
-                int leftoverAmount = leftoverMap.values().stream()
-                        .mapToInt(ItemStack::getAmount)
-                        .sum();
-
-                int accepted = addAmount - leftoverAmount;
-
-                if (accepted > 0) {
-                    remaining.setAmount(remaining.getAmount() - accepted);
-                    addedAny = true;
-                }
-            }
-
-            if (!addedAny) {
-                break;
+                if (remaining == null || remaining.getAmount() <= 0) break;
+                remaining = tryAddToInventory(hopper.getInventory(), remaining);
             }
         }
 
-        if (remaining.getAmount() > 0) {
+        // 3. Kalau masih sisa juga, drop
+        if (remaining != null && remaining.getAmount() > 0) {
             origin.getWorld().dropItemNaturally(origin.getLocation(), remaining);
         }
     }
 
-    public boolean isAllowedInputSide(Block destBlock, Block sourceBlock) {
-        for (BlockFace face : SIDES) {
-            if (destBlock.getRelative(face).equals(sourceBlock)) {
-                return inputFaces.contains(face);
+    /**
+     * Coba masukkan item ke inventory, kembalikan sisa yang tidak masuk
+     */
+    private ItemStack tryAddToInventory(Inventory inventory, ItemStack item) {
+        if (item == null || item.getAmount() <= 0) return null;
+        Map<Integer, ItemStack> leftover = inventory.addItem(item);
+        if (leftover.isEmpty()) return null;
+        // Gabungkan semua leftover
+        ItemStack combined = null;
+        for (ItemStack left : leftover.values()) {
+            if (combined == null) {
+                combined = left.clone();
+            } else {
+                combined.setAmount(combined.getAmount() + left.getAmount());
             }
         }
+        return combined;
+    }
 
+    public boolean isAllowedInputSide(Block destBlock, Block sourceBlock) {
+        for (BlockFace face : SIDES) {
+            if (destBlock.getRelative(face).equals(sourceBlock)) return inputFaces.contains(face);
+        }
         return false;
     }
 
-    public void handleHopperInput(Block destBlock, Inventory source, Inventory destination, ItemStack moved) {
-        if (moved == null || moved.getType().isAir()) {
-            return;
-        }
+    public Material getBlockMaterial() { return blockMaterial; }
+    public int getMinPower() { return minPower; }
+    public List<Hopper> getOutputHoppers(Block target) { return findOutputHoppers(target); }
 
-        if (inputRequiresPower && !isPowered(destBlock)) {
-            return;
-        }
-
-        AutocraftRecipe recipe = getRecipe(destBlock);
-        if (recipe == null) {
-            return;
-        }
-
-        int planned = calculateAccepted(recipe, destination, moved, moved.getAmount());
-        if (planned <= 0) {
-            return;
-        }
-
-        ItemStack toRemove = moved.clone();
-        toRemove.setAmount(planned);
-
-        Map<Integer, ItemStack> leftoverMap = source.removeItem(toRemove);
-        int leftover = leftoverMap.values().stream()
-                .mapToInt(ItemStack::getAmount)
-                .sum();
-
-        int actual = planned - leftover;
-        if (actual <= 0) {
-            return;
-        }
-
-        distribute(destination, recipe, moved, actual);
-        attemptCraft(destBlock);
-    }
-
-    private int calculateAccepted(AutocraftRecipe recipe, Inventory grid, ItemStack item, int amount) {
-        int remaining = amount;
-        int accepted = 0;
-
-        for (int i = 0; i < 9 && remaining > 0; i++) {
-            ItemStack required = recipe.pattern()[i];
-
-            if (required == null || required.getType().isAir()) {
-                continue;
-            }
-
-            if (!required.isSimilar(item)) {
-                continue;
-            }
-
-            ItemStack current = grid.getItem(i);
-
-            if (current != null && !current.getType().isAir() && !required.isSimilar(current)) {
-                continue;
-            }
-
-            int currentAmount = current != null ? current.getAmount() : 0;
-            int requiredAmount = requiredAmount(required);
-
-            if (currentAmount >= requiredAmount) {
-                continue;
-            }
-
-            int canAdd = Math.min(requiredAmount - currentAmount, remaining);
-            accepted += canAdd;
-            remaining -= canAdd;
-        }
-
-        return accepted;
-    }
-
-    private void distribute(Inventory grid, AutocraftRecipe recipe, ItemStack item, int amount) {
-        int remaining = amount;
-
-        for (int i = 0; i < 9 && remaining > 0; i++) {
-            ItemStack required = recipe.pattern()[i];
-
-            if (required == null || required.getType().isAir()) {
-                continue;
-            }
-
-            if (!required.isSimilar(item)) {
-                continue;
-            }
-
-            ItemStack current = grid.getItem(i);
-
-            if (current != null && !current.getType().isAir() && !required.isSimilar(current)) {
-                continue;
-            }
-
-            int currentAmount = current != null ? current.getAmount() : 0;
-            int requiredAmount = requiredAmount(required);
-
-            if (currentAmount >= requiredAmount) {
-                continue;
-            }
-
-            int canAdd = Math.min(requiredAmount - currentAmount, remaining);
-            if (canAdd <= 0) {
-                continue;
-            }
-
-            if (current == null || current.getType().isAir()) {
-                ItemStack add = item.clone();
-                add.setAmount(canAdd);
-                grid.setItem(i, add);
-            } else {
-                current.setAmount(currentAmount + canAdd);
-            }
-
-            remaining -= canAdd;
-        }
-    }
-
-    public Material getBlockMaterial() {
-        return blockMaterial;
-    }
-
-    public int getMinPower() {
-        return minPower;
+    public ItemStack[] getGrid(Block block) {
+        ItemStack[] grid = new ItemStack[9];
+        if (!(block.getState(false) instanceof Container container)) return grid;
+        Inventory inv = container.getInventory();
+        for (int i = 0; i < 9; i++) grid[i] = inv.getItem(i);
+        return grid;
     }
 
     public List<String> describeAdjacentHoppers(Block block) {
         List<String> lines = new ArrayList<>();
-
         for (BlockFace face : SIDES) {
             Block relative = block.getRelative(face);
-
-            if (!(relative.getState() instanceof Hopper hopper)) {
-                continue;
-            }
-
+            if (!(relative.getState(false) instanceof Hopper hopper)) continue;
             String facing = "?";
-            if (relative.getBlockData() instanceof org.bukkit.block.data.type.Hopper data) {
-                facing = data.getFacing().name();
-            }
-
-            boolean feeding = isFeedingInto(relative, block);
-            boolean locked = relative.isBlockPowered() || relative.getBlockPower() > 0;
-
+            if (relative.getBlockData() instanceof org.bukkit.block.data.type.Hopper data) facing = data.getFacing().name();
+            boolean isInput = isFeedingInto(relative, block);
+            boolean isOutput = (face == BlockFace.DOWN);
             StringBuilder items = new StringBuilder();
             for (ItemStack item : hopper.getInventory().getContents()) {
                 if (item != null && !item.getType().isAir()) {
@@ -837,14 +591,62 @@ public final class AutocraftManager {
                     items.append(item.getType().name()).append("x").append(item.getAmount());
                 }
             }
-
-            lines.add(face.name() + ": facing=" + facing
-                    + " input=" + feeding
-                    + " locked=" + locked
-                    + " contents=[" + items + "]");
+            lines.add(face.name() + ": facing=" + facing + " input=" + isInput + " output=" + isOutput + " contents=[" + items + "]");
         }
-
         return lines;
     }
 
+    // ==================== VANILLA RECIPE MATCHING ====================
+
+    public Recipe findMatchingVanillaRecipe(ItemStack[] pattern) {
+        Iterator<Recipe> it = Bukkit.recipeIterator();
+        while (it.hasNext()) {
+            Recipe recipe = it.next();
+            if (recipe instanceof ShapedRecipe shaped && matchesShaped(pattern, shaped)) return recipe;
+            if (recipe instanceof ShapelessRecipe shapeless && matchesShapeless(pattern, shapeless)) return recipe;
+        }
+        return null;
+    }
+
+    private boolean matchesShaped(ItemStack[] pattern, ShapedRecipe recipe) {
+        String[] shape = recipe.getShape();
+        Map<Character, RecipeChoice> map = recipe.getChoiceMap();
+        int rows = shape.length; if (rows == 0) return false;
+        int cols = shape[0].length();
+        if (rows > 3 || cols > 3) return false;
+        for (int dr = 0; dr <= 3 - rows; dr++) {
+            for (int dc = 0; dc <= 3 - cols; dc++) {
+                if (matchesAtShift(pattern, shape, map, dr, dc)) return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean matchesAtShift(ItemStack[] pattern, String[] shape, Map<Character, RecipeChoice> map, int dr, int dc) {
+        for (int r = 0; r < 3; r++) {
+            for (int c = 0; c < 3; c++) {
+                ItemStack patternItem = pattern[r * 3 + c];
+                int shapeR = r - dr, shapeC = c - dc;
+                if (shapeR >= 0 && shapeR < shape.length && shapeC >= 0 && shapeC < shape[shapeR].length()) {
+                    RecipeChoice choice = map.get(shape[shapeR].charAt(shapeC));
+                    if (choice == null) { if (patternItem != null && !patternItem.getType().isAir()) return false; }
+                    else { if (patternItem == null || patternItem.getType().isAir() || !choice.test(patternItem)) return false; }
+                } else { if (patternItem != null && !patternItem.getType().isAir()) return false; }
+            }
+        }
+        return true;
+    }
+
+    private boolean matchesShapeless(ItemStack[] pattern, ShapelessRecipe recipe) {
+        List<RecipeChoice> choices = new ArrayList<>(recipe.getChoiceList());
+        for (ItemStack patternItem : pattern) {
+            if (patternItem == null || patternItem.getType().isAir()) continue;
+            boolean found = false;
+            for (int i = 0; i < choices.size(); i++) {
+                if (choices.get(i).test(patternItem)) { choices.remove(i); found = true; break; }
+            }
+            if (!found) return false;
+        }
+        return choices.isEmpty();
+    }
 }
